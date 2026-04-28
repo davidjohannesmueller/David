@@ -210,6 +210,49 @@ label{
 .muscle-select{
   display:flex;flex-wrap:wrap;gap:5px;margin-top:6px;
 }
+/* ── MODE CHIP (Hypertrophie/Kraft toggle) ── */
+.mode-chip{
+  padding:4px 10px;
+  border-radius:4px;
+  font-family:'Oswald',sans-serif;
+  font-size:11px;font-weight:600;letter-spacing:0.5px;
+  cursor:pointer;transition:all .15s;
+  border:1px solid var(--border);
+  color:var(--text-muted);background:var(--bg4);
+}
+.mode-chip.active{border-color:var(--gold);color:var(--gold);background:var(--gold-dim);}
+.mode-chip.strength.active{border-color:#e67e22;color:#e67e22;background:rgba(230,126,34,.12);}
+/* ── SESSION TIMER BAR ── */
+.session-timer-bar{
+  display:none;align-items:center;justify-content:space-between;
+  background:linear-gradient(135deg,rgba(212,160,23,.15),rgba(212,160,23,.05));
+  border:1px solid rgba(212,160,23,.3);
+  border-radius:6px;padding:10px 14px;margin-bottom:10px;
+}
+.session-timer-bar.active{display:flex;}
+.session-timer-display{
+  font-family:'Bebas Neue',sans-serif;font-size:28px;
+  color:var(--gold);letter-spacing:3px;
+}
+.training-controls{display:flex;gap:8px;margin-bottom:12px;}
+/* ── WEEK STATS ── */
+.week-row{
+  display:grid;grid-template-columns:1fr auto auto;gap:12px;
+  padding:10px 0;border-bottom:1px solid var(--border);align-items:center;
+}
+.week-row:last-child{border:none;}
+.week-label{
+  font-family:'Oswald',sans-serif;font-weight:600;font-size:14px;
+  letter-spacing:.5px;
+}
+.week-sub{font-size:11px;color:var(--text-muted);margin-top:2px;}
+.week-sessions{
+  font-family:'Bebas Neue',sans-serif;font-size:18px;color:var(--text);min-width:30px;text-align:center;
+}
+.week-hours{
+  font-family:'Bebas Neue',sans-serif;font-size:20px;color:var(--gold);
+  letter-spacing:1px;min-width:60px;text-align:right;
+}
 .muscle-chip{
   padding:3px 10px;
   border-radius:20px;
@@ -591,6 +634,11 @@ canvas{display:block;}
     <div class="stat-tile"><div class="stat-val" id="statStreak">0</div><div class="stat-label">Streak 🔥</div></div>
   </div>
 
+  <div class="card" id="weeklyCard" style="display:none">
+    <div class="card-title">📅 Wochen-Übersicht</div>
+    <div id="weeklyList"></div>
+  </div>
+
   <div class="card" id="weightCard" style="display:none">
     <div class="card-title">Körpergewicht</div>
     <div id="weightMini"></div>
@@ -617,26 +665,46 @@ canvas{display:block;}
 
 <!-- ═══ SESSION ═══ -->
 <div class="view" id="view-session">
+  <!-- Session timer bar -->
+  <div class="session-timer-bar" id="sessionTimerBar">
+    <div>
+      <div class="timer-label">⏱ Trainingsdauer</div>
+      <div class="session-timer-display" id="sessionTimerDisplay">00:00:00</div>
+    </div>
+    <div style="font-size:11px;color:var(--text-muted);">Auto-Save aktiv</div>
+  </div>
+
+  <!-- Training Start/End controls -->
+  <div class="training-controls">
+    <button class="btn btn-success" id="startTrainingBtn" style="flex:1;" onclick="startSessionTimer()">▶ Training starten</button>
+    <button class="btn btn-danger" id="endTrainingBtn" style="flex:1;display:none;" onclick="endSessionTimer()">⏹ Training beenden</button>
+  </div>
+
   <div class="card">
     <div class="form-group">
       <label>Datum</label>
-      <input type="date" id="sessionDate">
+      <input type="date" id="sessionDate" oninput="autoSaveDraft()">
     </div>
     <div class="form-group">
       <label>Einheitname</label>
-      <input type="text" id="sessionName" placeholder="z.B. Push, Rücken/Bizeps, Beine...">
+      <input type="text" id="sessionName" placeholder="z.B. Push, Rücken/Bizeps, Beine..." oninput="autoSaveDraft()">
     </div>
     <div class="form-group">
       <label>Notiz</label>
-      <textarea id="sessionNote" rows="2" placeholder="Befinden, Energie, Besonderheiten..."></textarea>
+      <textarea id="sessionNote" rows="2" placeholder="Befinden, Energie, Besonderheiten..." oninput="autoSaveDraft()"></textarea>
     </div>
   </div>
 
   <div id="exerciseList"></div>
 
   <div style="margin-bottom:12px;">
-    <div class="card-title" style="margin-bottom:8px;">Schnellauswahl</div>
+    <div class="card-title" style="margin-bottom:8px;">Schnellauswahl Übungen</div>
     <div id="quickChips"></div>
+  </div>
+
+  <div style="margin-bottom:12px;">
+    <div class="card-title" style="margin-bottom:8px;">🔥 20-Min Abs Workouts</div>
+    <div id="absChips"></div>
   </div>
 
   <button class="btn btn-outline" style="width:100%;margin-bottom:12px;" onclick="addExercise()">+ Übung hinzufügen</button>
@@ -657,12 +725,20 @@ canvas{display:block;}
 
 <!-- ═══ PLANS ═══ -->
 <div class="view" id="view-plans">
-  <button class="btn btn-gold" style="width:100%;margin-bottom:14px;" onclick="openNewPlanModal()">+ Neuen Plan erstellen</button>
+  <div class="card" id="recoveryCard">
+    <div class="card-title">🎯 Heute empfohlen</div>
+    <div id="recoveryStatus" style="font-size:13px;color:var(--text-muted);margin-bottom:10px;"></div>
+    <div id="recommendedPlans"></div>
+  </div>
+
+  <button class="btn btn-gold" style="width:100%;margin-bottom:14px;" onclick="openNewPlanModal()">+ Neuen eigenen Plan erstellen</button>
+
+  <div class="card-title" id="myPlansTitle" style="margin-top:14px;display:none;">📋 Meine Pläne</div>
   <div id="plansList"></div>
   <div class="empty" id="plansEmpty" style="display:none">
     <div class="empty-icon">📋</div>
-    <h3>Keine Pläne</h3>
-    <p style="font-size:14px;color:var(--text-muted)">Erstelle einen Trainingsplan als Vorlage</p>
+    <h3>Keine eigenen Pläne</h3>
+    <p style="font-size:14px;color:var(--text-muted)">Eigene Trainingspläne erstellen oder die Empfehlungen oben nutzen</p>
   </div>
 </div>
 
@@ -770,15 +846,52 @@ let sessions = [];
 let weightLog = [];
 let plans = [];
 let settings = { restDefault: 120, repThreshold: 12 };
-let currentSession = { id: null, date: '', name: '', note: '', exercises: [] };
+let currentSession = { id: null, date: '', name: '', note: '', exercises: [], startedAt: null, endedAt: null, durationMin: 0, isActive: false };
 let editingPlanIdx = null;
 let timerInterval = null;
 let timerSeconds = 0;
+let sessionTimerInterval = null;
+let sessionTimerSeconds = 0;
 let weightChartDashInst = null;
 let weightChartFullInst = null;
 let progressChartInst = null;
+let autoSaveTimeout = null;
 
 const MUSCLES = ['Brust','Rücken','Beine','Schultern','Bizeps','Trizeps','Core'];
+const RECOVERY_HOURS = 48;
+const ABS_WORKOUTS = [
+  { name: '20-Min Core Crusher', exercises: [
+    {name:'Plank Hold',muscle:'Core'},{name:'Russian Twists',muscle:'Core'},
+    {name:'Bicycle Crunches',muscle:'Core'},{name:'Mountain Climbers',muscle:'Core'},
+    {name:'Leg Raises',muscle:'Core'},{name:'Sit-ups',muscle:'Core'}
+  ]},
+  { name: '20-Min Lower Abs Focus', exercises: [
+    {name:'Reverse Crunches',muscle:'Core'},{name:'Leg Raises',muscle:'Core'},
+    {name:'Flutter Kicks',muscle:'Core'},{name:'Knee Tucks',muscle:'Core'},
+    {name:'Plank Hold',muscle:'Core'},{name:'Hollow Body Hold',muscle:'Core'}
+  ]},
+  { name: '20-Min Six Pack', exercises: [
+    {name:'Crunches',muscle:'Core'},{name:'Bicycle Crunches',muscle:'Core'},
+    {name:'V-Ups',muscle:'Core'},{name:'Plank Hold',muscle:'Core'},
+    {name:'Side Plank',muscle:'Core'},{name:'Russian Twists',muscle:'Core'}
+  ]},
+  { name: '20-Min Obliques', exercises: [
+    {name:'Side Plank',muscle:'Core'},{name:'Russian Twists',muscle:'Core'},
+    {name:'Standing Side Crunch',muscle:'Core'},{name:'Bicycle Crunches',muscle:'Core'},
+    {name:'Heel Touches',muscle:'Core'},{name:'Side Plank Dips',muscle:'Core'}
+  ]},
+  { name: '20-Min Beginner Abs', exercises: [
+    {name:'Crunches',muscle:'Core'},{name:'Plank Hold',muscle:'Core'},
+    {name:'Sit-ups',muscle:'Core'},{name:'Knee Raises',muscle:'Core'},
+    {name:'Dead Bug',muscle:'Core'},{name:'Bird Dog',muscle:'Core'}
+  ]}
+];
+
+// Training Mode: hypertrophy (8-12 reps, RIR 1-2) vs strength (3-6 reps, RIR 0-1)
+const TRAINING_MODES = {
+  hypertrophy: { label:'Hypertrophie', minReps:8, maxReps:12, rir:'1-2', color:'#D4A017' },
+  strength: { label:'Kraft', minReps:3, maxReps:6, rir:'0-1', color:'#e67e22' }
+};
 const KNOWN_EXERCISES = [
   'Bankdrücken','Schrägbankdrücken','Kurzhantel Bankdrücken','Dips','Kabelfliegende',
   'Schulterdrücken','Seitheben','Vorgebeugtes Seitheben','Face Pulls',
@@ -808,6 +921,20 @@ window.onload = () => {
   renderWeightView();
   renderQuickChips();
   initPWA();
+
+  // Restore draft if present
+  if (currentSession.exercises?.length || currentSession.name) {
+    document.getElementById('sessionDate').value = currentSession.date || new Date().toISOString().split('T')[0];
+    document.getElementById('sessionName').value = currentSession.name || '';
+    document.getElementById('sessionNote').value = currentSession.note || '';
+    document.getElementById('exerciseList').innerHTML = '';
+    currentSession.exercises.forEach((_, i) => renderExercise(i));
+    if (currentSession.isActive) {
+      document.getElementById('startTrainingBtn').style.display = 'none';
+      document.getElementById('endTrainingBtn').style.display = 'inline-flex';
+    }
+    setTimeout(() => toast('💾 Auto-Save: Eingaben wiederhergestellt', 'success'), 800);
+  }
 };
 
 function loadAll() {
@@ -821,12 +948,49 @@ function loadAll() {
   if (wl) weightLog = JSON.parse(wl);
   const pl = localStorage.getItem('dg_plans');
   if (pl) plans = JSON.parse(pl);
+
+  // Recover unsaved session
+  const draft = localStorage.getItem('dg_draft');
+  if (draft) {
+    try {
+      const parsed = JSON.parse(draft);
+      if (parsed.exercises?.length || parsed.name || parsed.note) {
+        currentSession = parsed;
+        // Resume timer if was running
+        if (currentSession.isActive && currentSession.startedAt) {
+          const elapsed = Math.floor((Date.now() - currentSession.startedAt) / 1000);
+          sessionTimerSeconds = elapsed;
+          startSessionTimer(true);
+        }
+      }
+    } catch {}
+  }
 }
 
 function saveAll() {
   localStorage.setItem('dg_sessions', JSON.stringify(sessions));
   localStorage.setItem('dg_weight', JSON.stringify(weightLog));
   localStorage.setItem('dg_plans', JSON.stringify(plans));
+}
+
+function autoSaveDraft() {
+  clearTimeout(autoSaveTimeout);
+  autoSaveTimeout = setTimeout(() => {
+    if (currentSession.exercises?.length || currentSession.name || currentSession.note) {
+      // Capture latest UI values
+      const dEl = document.getElementById('sessionDate');
+      const nEl = document.getElementById('sessionName');
+      const noEl = document.getElementById('sessionNote');
+      if (dEl) currentSession.date = dEl.value;
+      if (nEl) currentSession.name = nEl.value;
+      if (noEl) currentSession.note = noEl.value;
+      localStorage.setItem('dg_draft', JSON.stringify(currentSession));
+    }
+  }, 500);
+}
+
+function clearDraft() {
+  localStorage.removeItem('dg_draft');
 }
 
 function saveSettings() {
@@ -859,39 +1023,70 @@ function showView(name) {
 //  SESSION
 // ═══════════════════════════════════════
 function startNewSession(template) {
+  // Confirm overwrite if draft exists
+  if (currentSession.exercises?.length > 0 && !template) {
+    if (!confirm('Aktuelle Eingaben verwerfen und neue Einheit starten?')) return;
+  }
   currentSession = {
     id: Date.now().toString(),
     date: new Date().toISOString().split('T')[0],
     name: template?.name || '',
     note: '',
     exercises: template?.exercises
-      ? template.exercises.map(e => ({ name: e.name, muscle: e.muscle || '', sets: [{ weight: '', reps: '', rir: '' }] }))
-      : []
+      ? template.exercises.map(e => ({ name: e.name, muscle: e.muscle || '', mode: e.mode || 'hypertrophy', sets: [{ weight: '', reps: '', rir: '' }] }))
+      : [],
+    startedAt: null,
+    endedAt: null,
+    durationMin: 0,
+    isActive: false
   };
   document.getElementById('sessionName').value = currentSession.name;
   document.getElementById('sessionNote').value = '';
   setToday();
   document.getElementById('exerciseList').innerHTML = '';
+  // reset session timer UI
+  clearInterval(sessionTimerInterval); sessionTimerInterval = null;
+  sessionTimerSeconds = 0;
+  document.getElementById('sessionTimerBar')?.classList.remove('active');
+  const startBtn = document.getElementById('startTrainingBtn');
+  const endBtn = document.getElementById('endTrainingBtn');
+  if (startBtn) startBtn.style.display = 'inline-flex';
+  if (endBtn) endBtn.style.display = 'none';
   if (currentSession.exercises.length) {
     currentSession.exercises.forEach((_, i) => renderExercise(i));
   } else {
     addExercise();
   }
   showView('session');
+  autoSaveDraft();
 }
 
 function clearSession() {
-  if (confirm('Einheit verwerfen?')) {
-    currentSession = { id: null, date: '', name: '', note: '', exercises: [] };
+  if (confirm('Einheit verwerfen? Auto-Save Daten gehen verloren.')) {
+    clearInterval(sessionTimerInterval); sessionTimerInterval = null;
+    sessionTimerSeconds = 0;
+    currentSession = { id: null, date: '', name: '', note: '', exercises: [], startedAt: null, endedAt: null, durationMin: 0, isActive: false };
     document.getElementById('exerciseList').innerHTML = '';
+    document.getElementById('sessionTimerBar')?.classList.remove('active');
+    const startBtn = document.getElementById('startTrainingBtn');
+    const endBtn = document.getElementById('endTrainingBtn');
+    if (startBtn) startBtn.style.display = 'inline-flex';
+    if (endBtn) endBtn.style.display = 'none';
+    clearDraft();
     showView('dashboard');
   }
 }
 
 function addExercise(name = '', muscle = '') {
   const idx = currentSession.exercises.length;
-  currentSession.exercises.push({ name, muscle: muscle || EXERCISE_MUSCLES[name] || '', sets: [{ weight: '', reps: '', rir: '' }] });
+  currentSession.exercises.push({
+    name,
+    muscle: muscle || EXERCISE_MUSCLES[name] || '',
+    mode: 'hypertrophy',
+    sets: [{ weight: '', reps: '', rir: '' }]
+  });
   renderExercise(idx);
+  autoSaveDraft();
 }
 
 function renderExercise(idx) {
@@ -899,8 +1094,9 @@ function renderExercise(idx) {
   const existing = document.getElementById(`ex-block-${idx}`);
   if (existing) existing.remove();
   const ex = currentSession.exercises[idx];
+  if (!ex.mode) ex.mode = 'hypertrophy';
   const lastData = getLastSessionData(ex.name);
-  const suggestion = getSuggestion(ex.name);
+  const suggestion = getSuggestion(ex.name, ex.mode);
 
   const muscleChips = MUSCLES.map(m =>
     `<span class="muscle-chip${ex.muscle === m ? ' active' : ''}" data-m="${m}" onclick="setMuscle(${idx},'${m}')">${m}</span>`
@@ -913,6 +1109,13 @@ function renderExercise(idx) {
   const suggHtml = suggestion
     ? `<div class="suggestion-pill ${suggestion.type}">${suggestion.text}</div>`
     : '';
+
+  const modeToggle = `
+    <div style="display:flex;gap:6px;padding:6px 12px;align-items:center;">
+      <span style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;font-weight:700;">Ziel:</span>
+      <span class="mode-chip${ex.mode === 'hypertrophy' ? ' active' : ''}" onclick="setMode(${idx},'hypertrophy')">💪 Hypertrophie 8–12</span>
+      <span class="mode-chip strength${ex.mode === 'strength' ? ' active' : ''}" onclick="setMode(${idx},'strength')">🔥 Kraft 3–6</span>
+    </div>`;
 
   const div = document.createElement('div');
   div.className = 'exercise-block';
@@ -929,6 +1132,7 @@ function renderExercise(idx) {
       <button class="btn btn-ghost btn-icon" onclick="removeExercise(${idx})">✕</button>
     </div>
     <div class="muscle-select" style="padding:6px 12px;">${muscleChips}</div>
+    ${modeToggle}
     ${lastHint}${suggHtml}
     <div class="sets-table">
       <div class="sets-header">
@@ -970,18 +1174,26 @@ function setMuscle(idx, muscle) {
   document.querySelectorAll(`#ex-block-${idx} .muscle-chip`).forEach(c => {
     c.classList.toggle('active', c.dataset.m === muscle);
   });
+  autoSaveDraft();
 }
 
-function updateSet(ei, si, field, val) { currentSession.exercises[ei].sets[si][field] = val; }
+function setMode(idx, mode) {
+  currentSession.exercises[idx].mode = mode;
+  renderExercise(idx);
+  autoSaveDraft();
+}
+
+function updateSet(ei, si, field, val) { currentSession.exercises[ei].sets[si][field] = val; autoSaveDraft(); }
 function addSet(ei) {
   const ex = currentSession.exercises[ei];
   const last = ex.sets[ex.sets.length - 1];
   ex.sets.push({ weight: last?.weight || '', reps: last?.reps || '', rir: '' });
   renderSet(ei, ex.sets.length - 1);
   startTimer();
+  autoSaveDraft();
 }
-function removeSet(ei, si) { currentSession.exercises[ei].sets.splice(si, 1); renderExercise(ei); }
-function removeExercise(idx) { currentSession.exercises.splice(idx, 1); rebuildExList(); }
+function removeSet(ei, si) { currentSession.exercises[ei].sets.splice(si, 1); renderExercise(ei); autoSaveDraft(); }
+function removeExercise(idx) { currentSession.exercises.splice(idx, 1); rebuildExList(); autoSaveDraft(); }
 function rebuildExList() {
   document.getElementById('exerciseList').innerHTML = '';
   currentSession.exercises.forEach((_, i) => renderExercise(i));
@@ -993,11 +1205,29 @@ function saveSession() {
   currentSession.note = document.getElementById('sessionNote').value;
   currentSession.exercises = currentSession.exercises.filter(e => e.name.trim());
   if (!currentSession.exercises.length) { toast('Mindestens eine Übung eingeben', 'error'); return; }
+
+  // Stop session timer if running and capture duration
+  if (sessionTimerInterval) {
+    clearInterval(sessionTimerInterval); sessionTimerInterval = null;
+    currentSession.endedAt = Date.now();
+    currentSession.durationMin = Math.round(sessionTimerSeconds / 60);
+    currentSession.isActive = false;
+  } else if (!currentSession.durationMin && currentSession.startedAt) {
+    currentSession.durationMin = Math.round(sessionTimerSeconds / 60);
+  }
+
   sessions.unshift(JSON.parse(JSON.stringify(currentSession)));
   saveAll();
+  clearDraft();
   toast('✅ Einheit gespeichert!', 'success');
-  currentSession = { id: null, date: '', name: '', note: '', exercises: [] };
+  currentSession = { id: null, date: '', name: '', note: '', exercises: [], startedAt: null, endedAt: null, durationMin: 0, isActive: false };
+  sessionTimerSeconds = 0;
   document.getElementById('exerciseList').innerHTML = '';
+  document.getElementById('sessionTimerBar')?.classList.remove('active');
+  const startBtn = document.getElementById('startTrainingBtn');
+  const endBtn = document.getElementById('endTrainingBtn');
+  if (startBtn) startBtn.style.display = 'inline-flex';
+  if (endBtn) endBtn.style.display = 'none';
   renderQuickChips();
   showView('dashboard');
 }
@@ -1056,29 +1286,77 @@ function renderQuickChips() {
   const all = [...new Set([...recent, ...KNOWN_EXERCISES.slice(0, 8)])].slice(0, 12);
   document.getElementById('quickChips').innerHTML = all.map(n =>
     `<span class="chip" onclick="addExercise('${escJs(n)}')">${n}</span>`).join('');
+  // Abs workouts
+  const absEl = document.getElementById('absChips');
+  if (absEl) {
+    absEl.innerHTML = ABS_WORKOUTS.map((w,i) =>
+      `<span class="chip" style="border-color:rgba(243,156,18,0.4);color:#f39c12;" onclick="addAbsWorkout(${i})">+ ${w.name}</span>`
+    ).join('');
+  }
+}
+
+function addAbsWorkout(idx) {
+  const w = ABS_WORKOUTS[idx];
+  // Set session name if empty
+  const nameEl = document.getElementById('sessionName');
+  if (nameEl && !nameEl.value) {
+    nameEl.value = w.name;
+    currentSession.name = w.name;
+  }
+  // Add all exercises with default 3 sets
+  w.exercises.forEach(ex => {
+    const i = currentSession.exercises.length;
+    currentSession.exercises.push({
+      name: ex.name,
+      muscle: ex.muscle,
+      mode: 'hypertrophy',
+      sets: [
+        { weight: '', reps: '', rir: '' },
+        { weight: '', reps: '', rir: '' },
+        { weight: '', reps: '', rir: '' }
+      ]
+    });
+    renderExercise(i);
+  });
+  toast(`${w.name} hinzugefügt`, 'success');
+  autoSaveDraft();
 }
 
 // ═══════════════════════════════════════
 //  SUGGESTIONS
 // ═══════════════════════════════════════
-function getSuggestion(exName) {
+function getSuggestion(exName, mode='hypertrophy') {
   if (!exName || sessions.length < 1) return null;
-  const threshold = settings.repThreshold || 12;
+  const m = TRAINING_MODES[mode] || TRAINING_MODES.hypertrophy;
   const history = sessions.flatMap(s => s.exercises.filter(e => e.name === exName));
   if (!history.length) return null;
   const last = history[0];
   const avgReps = last.sets.reduce((s, set) => s + (parseInt(set.reps)||0), 0) / (last.sets.length || 1);
   const avgWeight = last.sets.reduce((s, set) => s + (parseFloat(set.weight)||0), 0) / (last.sets.length || 1);
-  if (avgReps >= threshold) {
-    const nw = (avgWeight + (avgWeight < 20 ? 2.5 : 5)).toFixed(1);
-    return { type: 'increase', text: `🔼 Gewicht erhöhen → ${nw} kg (${threshold}+ Wdh. erreicht)` };
+
+  // If reps reached upper bound → suggest weight increase
+  if (avgReps >= m.maxReps) {
+    const inc = mode === 'strength' ? (avgWeight < 60 ? 2.5 : 5) : (avgWeight < 30 ? 2.5 : 5);
+    const nw = (avgWeight + inc).toFixed(1);
+    return { type: 'increase', text: `🔼 ${m.label}: Gewicht erhöhen → ${nw} kg (Ziel ${m.minReps}–${m.maxReps} Wdh erreicht)` };
   }
-  return { type: 'maintain', text: `📈 Ziel: ${threshold} Wdh. bei ${avgWeight.toFixed(1)} kg` };
+  // If reps below lower bound → too heavy
+  if (avgReps < m.minReps && avgReps > 0) {
+    return { type: 'maintain', text: `⬇ ${m.label}: Gewicht zu hoch — Ziel ${m.minReps}–${m.maxReps} Wdh @ RIR ${m.rir}` };
+  }
+  // Within range
+  return { type: 'maintain', text: `📈 ${m.label}: Bei ${avgWeight.toFixed(1)} kg bleiben — Ziel ${m.minReps}–${m.maxReps} Wdh @ RIR ${m.rir}` };
 }
 
 function getProgressSuggestions() {
   const names = [...new Set(sessions.flatMap(s => s.exercises.map(e => e.name)))];
-  return names.map(n => ({ name: n, s: getSuggestion(n) })).filter(x => x.s).map(x => ({ name: x.name, ...x.s }));
+  return names.map(n => {
+    // get latest mode used for this exercise
+    const lastSess = sessions.find(s => s.exercises.some(e => e.name === n));
+    const lastEx = lastSess?.exercises.find(e => e.name === n);
+    const mode = lastEx?.mode || 'hypertrophy';
+    return { name: n, s: getSuggestion(n, mode) };
+  }).filter(x => x.s).map(x => ({ name: x.name, ...x.s }));
 }
 
 // ═══════════════════════════════════════
@@ -1107,6 +1385,13 @@ function renderDashboard() {
     if ((checkDate - sd)/86400000 <= 1) { streak++; checkDate = sd; } else break;
   }
   document.getElementById('statStreak').textContent = streak;
+
+  // Weekly overview (KW)
+  const wkCard = document.getElementById('weeklyCard');
+  if (sessions.length) {
+    wkCard.style.display = 'block';
+    document.getElementById('weeklyList').innerHTML = renderWeeklyHours();
+  } else { wkCard.style.display = 'none'; }
 
   // Weight mini
   const wCard = document.getElementById('weightCard');
@@ -1142,6 +1427,58 @@ function renderDashboard() {
         <span class="suggestion-pill ${s.type}" style="margin:0;font-size:11px;">${s.text}</span>
       </div>`).join('');
   } else { sugCard.style.display = 'none'; }
+}
+
+function getISOWeek(d) {
+  const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const day = date.getUTCDay() || 7;
+  date.setUTCDate(date.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(date.getUTCFullYear(),0,1));
+  const week = Math.ceil((((date - yearStart)/86400000) + 1)/7);
+  return { week, year: date.getUTCFullYear() };
+}
+
+function renderWeeklyHours() {
+  const map = {};
+  sessions.forEach(s => {
+    const d = new Date(s.date+'T12:00:00');
+    const { week, year } = getISOWeek(d);
+    const key = `${year}-${String(week).padStart(2,'0')}`;
+    if (!map[key]) map[key] = { year, week, sessions:0, minutes:0 };
+    map[key].sessions++;
+    map[key].minutes += s.durationMin || 0;
+  });
+  const sorted = Object.values(map).sort((a,b) =>
+    (b.year - a.year) || (b.week - a.week)).slice(0, 8);
+  if (!sorted.length) return '<div style="font-size:13px;color:var(--text-muted);">Keine Daten</div>';
+  return sorted.map(w => {
+    const h = (w.minutes/60).toFixed(1);
+    return `<div class="week-row">
+      <div>
+        <div class="week-label">KW ${w.week} / ${w.year}</div>
+        <div class="week-sub">${w.sessions} Einheit${w.sessions>1?'en':''}</div>
+      </div>
+      <div class="week-sessions">${w.sessions}×</div>
+      <div class="week-hours">${w.minutes>0 ? h+' h' : '–'}</div>
+    </div>`;
+  }).join('');
+}
+
+// Recovery: which muscles were trained in last X hours
+function getRecentlyTrainedMuscles(hours = RECOVERY_HOURS) {
+  const cutoff = Date.now() - hours*3600*1000;
+  const recent = sessions.filter(s => {
+    const t = new Date(s.date+'T12:00:00').getTime();
+    return t >= cutoff;
+  });
+  const muscles = new Set();
+  recent.forEach(s => s.exercises.forEach(e => { if (e.muscle) muscles.add(e.muscle); }));
+  return [...muscles];
+}
+
+function getRecoveredMuscles() {
+  const recent = getRecentlyTrainedMuscles();
+  return MUSCLES.filter(m => !recent.includes(m));
 }
 
 function getPRs() {
@@ -1188,7 +1525,7 @@ function renderHistory() {
       <div class="session-card-header" onclick="toggleBody('hb-${i}')">
         <div>
           <div class="session-date">${formatDate(s.date)}</div>
-          <div class="session-name">${s.name || 'Freies Training'} · ${s.exercises.length} Übungen</div>
+          <div class="session-name">${s.name || 'Freies Training'} · ${s.exercises.length} Übungen${s.durationMin ? ` · ⏱ ${s.durationMin} Min` : ''}</div>
         </div>
         <div class="session-vol">${Math.round(vol).toLocaleString('de')} kg</div>
       </div>
@@ -1274,10 +1611,20 @@ function showProgressChart(exName) {
 //  PLANS
 // ═══════════════════════════════════════
 function renderPlans() {
+  // Recovery-based recommendations
+  renderRecommendedPlans();
+
   const container = document.getElementById('plansList');
   const empty = document.getElementById('plansEmpty');
-  if (!plans.length) { container.innerHTML = ''; empty.style.display = 'block'; return; }
+  const title = document.getElementById('myPlansTitle');
+  if (!plans.length) {
+    container.innerHTML = '';
+    empty.style.display = 'block';
+    title.style.display = 'none';
+    return;
+  }
   empty.style.display = 'none';
+  title.style.display = 'flex';
   container.innerHTML = plans.map((p, i) => `
     <div class="plan-card">
       <div class="plan-header">
@@ -1295,6 +1642,135 @@ function renderPlans() {
         <button class="btn btn-danger btn-sm" onclick="deletePlan(${i})">🗑</button>
       </div>
     </div>`).join('');
+}
+
+function renderRecommendedPlans() {
+  const recovered = getRecoveredMuscles();
+  const recent = getRecentlyTrainedMuscles();
+  const statusEl = document.getElementById('recoveryStatus');
+  const container = document.getElementById('recommendedPlans');
+
+  if (sessions.length === 0) {
+    statusEl.innerHTML = '<span style="color:var(--text-muted)">Noch keine Trainingsdaten – starte mit einem freien Training.</span>';
+    container.innerHTML = '';
+    return;
+  }
+
+  // Status text
+  let statusHtml = '';
+  if (recent.length) {
+    statusHtml += `<div style="margin-bottom:6px;">⏳ <strong>Recovery (48h):</strong> ${recent.map(m=>`<span class="mbadge ${m}">${m}</span>`).join(' ')}</div>`;
+  }
+  if (recovered.length) {
+    statusHtml += `<div>✅ <strong>Bereit:</strong> ${recovered.map(m=>`<span class="mbadge ${m}">${m}</span>`).join(' ')}</div>`;
+  }
+  statusEl.innerHTML = statusHtml || 'Alle Muskelgruppen sind ausgeruht 💪';
+
+  // Build 2 plan suggestions from recovered muscles
+  // Pull most-frequent exercises per muscle from history
+  const exByMuscle = {};
+  sessions.forEach(s => s.exercises.forEach(e => {
+    if (!e.muscle || !e.name) return;
+    if (!exByMuscle[e.muscle]) exByMuscle[e.muscle] = {};
+    exByMuscle[e.muscle][e.name] = (exByMuscle[e.muscle][e.name] || 0) + 1;
+  }));
+
+  // Default fallback exercises per muscle
+  const defaultExByMuscle = {
+    'Brust': ['Bankdrücken','Schrägbankdrücken','Kurzhantel Bankdrücken','Dips','Kabelfliegende','Liegestütze'],
+    'Rücken': ['Klimmzüge','Latzug','Rudern Kabelzug','Kurzhantel Rudern','Kreuzheben','Face Pulls'],
+    'Beine': ['Kniebeugen','Beinpresse','Beinstrecker','Beinbeuger','Wadenheben','Ausfallschritte'],
+    'Schultern': ['Schulterdrücken','Seitheben','Vorgebeugtes Seitheben','Face Pulls','Front Raises','Reverse Flys'],
+    'Bizeps': ['Bizepscurls','Hammercurls','Konzentrationscurls','Preacher Curls','Kabel-Curls','Chin-ups'],
+    'Trizeps': ['Trizepsdrücken','Dips','French Press','Overhead Trizeps','Diamond Push-ups','Trizeps Pushdown'],
+    'Core': ['Plank Hold','Russian Twists','Bicycle Crunches','Leg Raises','Sit-ups','Mountain Climbers']
+  };
+
+  const buildPlan = (muscleSet, planName) => {
+    const exercises = [];
+    const targetSize = 6;
+    // distribute 6 exercises across the chosen muscles
+    const perMuscle = Math.max(1, Math.floor(targetSize / muscleSet.length));
+    muscleSet.forEach(m => {
+      const fromHistory = Object.entries(exByMuscle[m]||{})
+        .sort((a,b)=>b[1]-a[1])
+        .map(([n])=>n);
+      const pool = [...new Set([...fromHistory, ...(defaultExByMuscle[m]||[])])];
+      pool.slice(0, perMuscle).forEach(name => {
+        if (exercises.length < targetSize) exercises.push({ name, muscle: m });
+      });
+    });
+    // fill if short
+    let i = 0;
+    while (exercises.length < targetSize && i < muscleSet.length * 3) {
+      const m = muscleSet[i % muscleSet.length];
+      const pool = [...new Set([...(Object.keys(exByMuscle[m]||{})), ...(defaultExByMuscle[m]||[])])];
+      const next = pool.find(p => !exercises.some(e => e.name === p));
+      if (next) exercises.push({ name: next, muscle: m });
+      i++;
+    }
+    return { name: planName, exercises: exercises.slice(0, targetSize) };
+  };
+
+  // Recovery-based plan logic
+  let plan1, plan2;
+  const ready = recovered.filter(m => m !== 'Core'); // core trainable separately
+  if (ready.length >= 2) {
+    // Group A: typical Push (Brust + Schultern + Trizeps if available)
+    const pushSet = ready.filter(m => ['Brust','Schultern','Trizeps'].includes(m));
+    const pullSet = ready.filter(m => ['Rücken','Bizeps'].includes(m));
+    const legsSet = ready.filter(m => m === 'Beine');
+
+    const candidates = [];
+    if (pushSet.length) candidates.push({ set: pushSet, name: 'Push: ' + pushSet.join(' / ') });
+    if (pullSet.length) candidates.push({ set: pullSet, name: 'Pull: ' + pullSet.join(' / ') });
+    if (legsSet.length) candidates.push({ set: legsSet, name: 'Leg Day: Beine' });
+
+    // If less than 2 categories ready, build mixed plans
+    if (candidates.length >= 2) {
+      plan1 = buildPlan(candidates[0].set, candidates[0].name);
+      plan2 = buildPlan(candidates[1].set, candidates[1].name);
+    } else if (candidates.length === 1) {
+      plan1 = buildPlan(candidates[0].set, candidates[0].name);
+      // second: mixed full body of remaining ready muscles
+      const others = ready.filter(m => !candidates[0].set.includes(m));
+      if (others.length) plan2 = buildPlan(others, 'Mix: ' + others.slice(0,3).join(' / '));
+    } else {
+      plan1 = buildPlan(ready.slice(0,3), 'Mix: ' + ready.slice(0,3).join(' / '));
+      if (ready.length > 3) plan2 = buildPlan(ready.slice(3,6), 'Mix: ' + ready.slice(3,6).join(' / '));
+    }
+  } else if (ready.length === 1) {
+    plan1 = buildPlan(ready, ready[0] + '-Fokus');
+    plan2 = { name: '20-Min Abs', exercises: ABS_WORKOUTS[0].exercises };
+  } else {
+    // nothing recovered → suggest abs / light cardio
+    plan1 = { name: '20-Min Core Crusher', exercises: ABS_WORKOUTS[0].exercises };
+    plan2 = { name: 'Aktive Erholung', exercises: [{name:'Mobility',muscle:'Core'},{name:'Stretching',muscle:'Core'},{name:'Foam Rolling',muscle:'Core'}] };
+  }
+
+  const renderRecCard = (p, i) => p ? `
+    <div class="plan-card" style="border-color:rgba(212,160,23,0.3);">
+      <div class="plan-header">
+        <div>
+          <div class="plan-name" style="color:var(--gold);">⚡ ${escHtml(p.name)}</div>
+          <div class="plan-ex-count">${p.exercises.length} Übungen · Empfohlen</div>
+        </div>
+      </div>
+      <div style="padding:0 14px 4px;font-size:13px;color:var(--text-muted);">
+        ${p.exercises.map(e=>`<span style="margin-right:8px;">${escHtml(e.name)}${e.muscle?`<span class="mbadge ${e.muscle}">${e.muscle}</span>`:''}</span>`).join('')}
+      </div>
+      <div class="plan-actions">
+        <button class="btn btn-gold btn-sm" onclick="startRecommendedPlan(${i})">▶ Als Einheit starten</button>
+      </div>
+    </div>` : '';
+
+  window.__recPlans = [plan1, plan2].filter(Boolean);
+  container.innerHTML = window.__recPlans.map((p,i)=>renderRecCard(p,i)).join('');
+}
+
+function startRecommendedPlan(idx) {
+  const p = window.__recPlans?.[idx];
+  if (p) startNewSession(p);
 }
 
 function openNewPlanModal() {
@@ -1520,6 +1996,47 @@ function updateTimerDisplay() {
   const m = String(Math.floor(abs/60)).padStart(2,'0');
   const s = String(abs%60).padStart(2,'0');
   document.getElementById('timerDisplay').textContent = `${timerSeconds<0?'-':''}${m}:${s}`;
+}
+
+// ─── SESSION TIMER (training duration) ───
+function startSessionTimer(resume=false) {
+  if (sessionTimerInterval) clearInterval(sessionTimerInterval);
+  if (!resume) {
+    currentSession.startedAt = Date.now();
+    currentSession.isActive = true;
+    sessionTimerSeconds = 0;
+  }
+  document.getElementById('sessionTimerBar').classList.add('active');
+  document.getElementById('startTrainingBtn').style.display = 'none';
+  document.getElementById('endTrainingBtn').style.display = 'inline-flex';
+  updateSessionTimerDisplay();
+  sessionTimerInterval = setInterval(() => {
+    sessionTimerSeconds++;
+    updateSessionTimerDisplay();
+    autoSaveDraft();
+  }, 1000);
+  autoSaveDraft();
+}
+
+function endSessionTimer() {
+  if (!confirm('Training beenden?')) return;
+  clearInterval(sessionTimerInterval); sessionTimerInterval = null;
+  currentSession.endedAt = Date.now();
+  currentSession.durationMin = Math.round(sessionTimerSeconds / 60);
+  currentSession.isActive = false;
+  document.getElementById('sessionTimerBar').classList.remove('active');
+  document.getElementById('startTrainingBtn').style.display = 'inline-flex';
+  document.getElementById('endTrainingBtn').style.display = 'none';
+  toast(`Training beendet: ${currentSession.durationMin} Min`, 'success');
+  autoSaveDraft();
+}
+
+function updateSessionTimerDisplay() {
+  const h = String(Math.floor(sessionTimerSeconds/3600)).padStart(2,'0');
+  const m = String(Math.floor((sessionTimerSeconds%3600)/60)).padStart(2,'0');
+  const s = String(sessionTimerSeconds%60).padStart(2,'0');
+  const el = document.getElementById('sessionTimerDisplay');
+  if (el) el.textContent = `${h}:${m}:${s}`;
 }
 
 // ═══════════════════════════════════════
