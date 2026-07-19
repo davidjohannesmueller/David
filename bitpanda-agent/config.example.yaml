@@ -1,0 +1,52 @@
+# Bitpanda Agent configuration.
+# Copy to config.yaml and adjust. config.yaml is git-ignored via data/state.
+
+# How often the agent evaluates the market, in seconds.
+poll_interval_seconds: 10
+
+# Instruments the agent is allowed to touch. Anything not listed here is
+# rejected by the risk manager, even if a strategy asks for it.
+allowed_instruments:
+  - BTC_EUR
+  - ETH_EUR
+  - ETH_BTC
+
+# ── Risk limits (hard guardrails, enforced before every order) ──────────
+risk:
+  # Maximum notional value of a single order, in quote currency (EUR).
+  max_order_notional_eur: 50
+  # Maximum total notional the agent may deploy at once, in EUR.
+  max_total_exposure_eur: 200
+  # Stop all trading for the day once realised loss reaches this (EUR).
+  max_daily_loss_eur: 25
+  # Reject market orders whose expected slippage exceeds this fraction.
+  max_slippage_pct: 0.5
+
+# ── Strategy configuration ──────────────────────────────────────────────
+# Enable/disable and parameterise each strategy. Set enabled: false to skip.
+strategies:
+  triangular_arbitrage:
+    enabled: true
+    # The three-leg cycle to scan, e.g. EUR -> BTC -> ETH -> EUR.
+    cycle: [BTC_EUR, ETH_BTC, ETH_EUR]
+    # Minimum net profit (after fees) required to fire, as a fraction.
+    min_profit_pct: 0.3
+    # Taker fee per leg, as a fraction (adjust to your fee tier).
+    taker_fee_pct: 0.15
+    # Notional of the entry leg, in EUR.
+    trade_notional_eur: 30
+
+  momentum:
+    enabled: false          # placeholder — confirm your real logic first
+    instrument: BTC_EUR
+    fast_period: 12
+    slow_period: 26
+    trade_notional_eur: 30
+
+  mean_reversion:
+    enabled: false          # placeholder — confirm your real logic first
+    instrument: ETH_EUR
+    lookback: 50
+    entry_z: 2.0
+    exit_z: 0.5
+    trade_notional_eur: 30

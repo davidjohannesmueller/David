@@ -1,0 +1,15 @@
+# Secrets — NEVER commit real API keys
+.env
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Runtime / state
+*.log
+state/
+data/*.json
