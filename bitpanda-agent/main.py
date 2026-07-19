@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Entry point for the Bitpanda / One Trading trading agent.
+"""Entry point for the multi-asset trading agent (stocks / crypto / forex).
 
 Examples:
   python main.py                 # run continuously (dry-run per .env)
@@ -13,8 +13,8 @@ import asyncio
 import logging
 
 from src.agent import TradingAgent
-from src.client import OneTradingClient
 from src.config import load_config
+from src.exchanges import build_exchange
 
 
 def setup_logging() -> None:
@@ -31,13 +31,17 @@ async def amain(args: argparse.Namespace) -> None:
         logging.getLogger("agent").warning(
             "LIVE MODE — real orders will be sent with real money!"
         )
-    async with OneTradingClient(cfg.rest_url, cfg.api_key) as client:
-        agent = TradingAgent(cfg, client)
+    exchanges = [build_exchange(spec) for spec in cfg.exchanges]
+    try:
+        agent = TradingAgent(cfg, exchanges)
         await agent.run(run_once=args.once)
+    finally:
+        for ex in exchanges:
+            await ex.close()
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Bitpanda trading agent")
+    parser = argparse.ArgumentParser(description="Multi-asset trading agent")
     parser.add_argument("--config", default=None, help="path to config YAML")
     parser.add_argument("--once", action="store_true",
                         help="run a single tick then exit")

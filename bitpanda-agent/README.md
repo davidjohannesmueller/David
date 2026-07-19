@@ -1,39 +1,54 @@
-# Bitpanda Trading Agent
+# Multi-Asset Trading Agent
 
-An automated trading agent for the **One Trading** exchange (formerly
-**Bitpanda Pro**), which offers the full REST + WebSocket trading API needed
-for order placement and arbitrage. The retail Bitpanda app API is read-only
-for this purpose and is **not** used here.
+An automated trading agent that runs the **same strategy across stocks, crypto
+and forex**. Each asset class is reached through a pluggable exchange adapter,
+so adding or switching venues never touches the strategy code.
 
 > ⚠️ **Real money warning.** In live mode this software places real orders.
-> It ships in **dry-run mode by default** (simulated orders only). Do not
-> switch to live trading until you have read the code, tested thoroughly, and
-> understand the risk. Nothing here is financial advice.
+> It ships in **dry-run mode by default** (simulated orders only) and the
+> recommended venue is **paper trading**. Do not switch to live until you have
+> read the code, tested thoroughly, and understand the risk. Not financial advice.
+
+## Why these venues
+
+| Asset class | Adapter | Notes |
+|-------------|---------|-------|
+| US stocks / ETFs | **Alpaca** | Free paper trading, best-documented. **Start here.** |
+| Crypto | **Alpaca** (or **Bitpanda/One Trading** for EU live) | Alpaca paper works EU-wide. Bitpanda = EU crypto live. |
+| Forex | **OANDA** | Alpaca has no forex. Free practice account. |
+
+Recommendation (matches earlier planning): **develop on Alpaca paper trading
+with one trend-following strategy**, prove the mechanics with zero real risk,
+then turn on more asset classes and, later, live trading in the EU via Bitpanda.
 
 ## Architecture
 
 ```
-main.py                  CLI entry point (--once / continuous, --config)
+main.py                       CLI entry (--once / continuous, --config)
 src/
-  config.py              loads .env (secrets) + YAML (trading params)
-  client.py              async REST client (One Trading / Bitpanda Pro)
-  models.py              typed Signal / Order / OrderBook / Balance
-  risk.py                hard guardrails — checked before every order
-  executor.py            dry-run-aware order execution
-  agent.py               main loop: snapshot -> strategies -> execute
+  config.py                   .env (secrets) + YAML (venues, strategies, risk)
+  models.py                   typed Signal / Order / OrderBook / Balance
+  risk.py                     hard guardrails — checked before every order
+  executor.py                 dry-run-aware; routes orders to the owning venue
+  agent.py                    main loop: snapshot -> strategies -> execute
+  client.py                   low-level One Trading REST client
+  exchanges/                  ← the pluggable venue layer
+    base.py                   Exchange interface (implement this to add a venue)
+    alpaca.py                 stocks + crypto
+    bitpanda.py               EU crypto (One Trading) — wraps client.py
+    oanda.py                  forex
+    mock.py                   in-memory venue for offline tests
   strategies/
-    base.py              Strategy interface + MarketSnapshot
-    triangular_arbitrage.py   ✅ implemented (the arbitrage strategy)
-    momentum.py               🟡 placeholder default (crypto strategy #2)
-    mean_reversion.py         🟡 placeholder default (crypto strategy #3)
-tests/test_arbitrage.py  offline tests (no network / no API key needed)
+    base.py                   Strategy interface + MarketSnapshot
+    trend_following.py        ✅ primary strategy (asset-agnostic, trailing stop)
+    triangular_arbitrage.py   optional (single-venue arb)
+    momentum.py / mean_reversion.py   optional extras
+tests/                        offline tests (no keys / no network)
 ```
 
-The three strategies map to what we discussed: one **arbitrage** strategy
-(triangular arbitrage within the exchange) plus **two crypto strategies**.
-The two crypto strategies currently contain sensible *placeholder* logic
-(SMA crossover and z-score mean-reversion) so the pipeline runs end to end —
-**replace their `evaluate()` bodies with your exact rules.**
+The agent builds one router: **instrument → exchange**. When a strategy asks to
+trade `AAPL` it goes to Alpaca; `EUR_USD` goes to OANDA; `BTC_EUR` to Bitpanda —
+automatically. One trend-following strategy therefore trades all three at once.
 
 ## Setup
 
@@ -42,14 +57,13 @@ cd bitpanda-agent
 python3 -m venv .venv && source .venv/bin/activate   # optional
 pip install -r requirements.txt
 
-cp .env.example .env          # then add your API key
-cp config.example.yaml config.yaml   # optional; tune params
+cp .env.example .env                  # add your paper-trading keys
+cp config.example.yaml config.yaml    # choose venues, instruments, params
 ```
 
-### Getting an API key
-Create an API key inside your One Trading / Bitpanda Pro account and put it in
-`.env` as `ONETRADING_API_KEY`. Grant it only the scopes you need. `.env` is
-git-ignored — **never commit it.**
+Get free paper keys: **Alpaca** (https://alpaca.markets/, Paper account) and,
+for forex, **OANDA** (https://www.oanda.com/, fxTrade Practice). `.env` is
+git-ignored — never commit it.
 
 ## Running
 
@@ -58,30 +72,30 @@ python main.py --once      # single evaluation tick (great for testing)
 python main.py             # run continuously on the poll interval
 ```
 
-Dry-run vs live is controlled by `DRY_RUN` in `.env`:
-- `DRY_RUN=true`  → simulate only, log intended orders (default)
-- `DRY_RUN=false` → send **real** orders (requires a valid API key)
+`DRY_RUN=true` (default) simulates and logs intended orders. `DRY_RUN=false`
+sends real orders to whatever venue owns each instrument — with Alpaca/OANDA
+pointed at their **paper** endpoints, that is still risk-free.
 
 ## Safety guardrails (`config.yaml` → `risk`)
 
-Every signal must pass the risk manager before it can become an order:
-- `max_order_notional_eur` — cap on a single order's size
-- `max_total_exposure_eur` — cap on total deployed capital
-- `max_daily_loss_eur` — halts all trading for the day when hit
-- `allowed_instruments` — an allow-list; anything else is rejected
+Every signal must pass the risk manager before it becomes an order:
+`max_order_notional_eur`, `max_total_exposure_eur`, `max_daily_loss_eur`
+(halts the day when hit), plus an instrument allow-list.
 
 ## Tests
 
 ```bash
-python tests/test_arbitrage.py     # no API key / network needed
+python tests/test_trend_following.py   # full engine via a mock venue
+python tests/test_arbitrage.py         # arbitrage detection + risk checks
 ```
 
 ## Status & next steps
 
-- [x] Project scaffold, config, REST client, risk manager, dry-run executor
-- [x] Triangular arbitrage strategy (implemented + tested offline)
-- [x] Momentum + mean-reversion **placeholders** (runnable, need your rules)
-- [ ] Fill in the exact logic for the two crypto strategies
-- [ ] Live WebSocket price feed (currently REST order-book polling)
-- [ ] Chain arbitrage legs on real fills (currently bundled from expected fills)
-- [ ] Validate order payloads against a real API key in dry-run first
+- [x] Pluggable exchange layer + instrument routing (stocks / crypto / forex)
+- [x] Alpaca adapter (stocks + crypto), Bitpanda adapter, OANDA adapter
+- [x] Trend-following strategy (asset-agnostic, trailing stop) — engine-tested
+- [x] Dry-run-by-default executor; risk manager guardrails
+- [ ] Validate Alpaca/OANDA adapters against real paper keys (live smoke test)
+- [ ] Market-hours awareness per asset class (stocks closed nights/weekends)
+- [ ] WebSocket price feeds (currently REST quote polling)
+- [ ] Add your second strategy once trend-following is proven in paper

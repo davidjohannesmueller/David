@@ -1,52 +1,55 @@
-# Bitpanda Agent configuration.
-# Copy to config.yaml and adjust. config.yaml is git-ignored via data/state.
+# Multi-asset trading agent configuration.
+# Copy to config.yaml and adjust.
 
-# How often the agent evaluates the market, in seconds.
 poll_interval_seconds: 10
 
-# Instruments the agent is allowed to touch. Anything not listed here is
-# rejected by the risk manager, even if a strategy asks for it.
-allowed_instruments:
-  - BTC_EUR
-  - ETH_EUR
-  - ETH_BTC
+# ── Venues ──────────────────────────────────────────────────────────────
+# Each exchange declares which instruments it trades. The agent routes every
+# instrument to the venue that owns it. Credentials come from .env.
+#
+# Recommended start: Alpaca paper trading (free, works in the EU for paper).
+# Enable OANDA / Bitpanda once you have their (practice) keys.
+exchanges:
+  - type: alpaca
+    asset_class: stocks
+    instruments: [AAPL, MSFT, SPY]
+
+  - type: alpaca
+    asset_class: crypto
+    instruments: [BTC/USD, ETH/USD]
+
+  # Forex via OANDA practice account (Alpaca has no forex). Add keys to enable.
+  # - type: oanda
+  #   asset_class: forex
+  #   instruments: [EUR_USD, GBP_USD]
+
+  # EU crypto live trading later (read the safety notes first).
+  # - type: bitpanda
+  #   asset_class: crypto
+  #   instruments: [BTC_EUR, ETH_EUR]
 
 # ── Risk limits (hard guardrails, enforced before every order) ──────────
 risk:
-  # Maximum notional value of a single order, in quote currency (EUR).
-  max_order_notional_eur: 50
-  # Maximum total notional the agent may deploy at once, in EUR.
-  max_total_exposure_eur: 200
-  # Stop all trading for the day once realised loss reaches this (EUR).
-  max_daily_loss_eur: 25
-  # Reject market orders whose expected slippage exceeds this fraction.
-  max_slippage_pct: 0.5
+  max_order_notional_eur: 1000     # cap per single order (quote currency)
+  max_total_exposure_eur: 5000     # cap on total deployed capital
+  max_daily_loss_eur: 250          # halt trading for the day when hit
 
-# ── Strategy configuration ──────────────────────────────────────────────
-# Enable/disable and parameterise each strategy. Set enabled: false to skip.
+# ── Strategies ──────────────────────────────────────────────────────────
+# Start with ONE strategy (trend-following) until the mechanics are proven.
 strategies:
-  triangular_arbitrage:
+  trend_following:
     enabled: true
-    # The three-leg cycle to scan, e.g. EUR -> BTC -> ETH -> EUR.
+    # Runs across any asset class — list instruments from the venues above.
+    instruments: [AAPL, MSFT, SPY, BTC/USD, ETH/USD]
+    fast_period: 20
+    slow_period: 50
+    trailing_stop_pct: 3.0
+    trade_notional: 1000
+
+  # Optional extras — off by default. Enable when you are ready.
+  triangular_arbitrage:
+    enabled: false
     cycle: [BTC_EUR, ETH_BTC, ETH_EUR]
-    # Minimum net profit (after fees) required to fire, as a fraction.
     min_profit_pct: 0.3
-    # Taker fee per leg, as a fraction (adjust to your fee tier).
     taker_fee_pct: 0.15
-    # Notional of the entry leg, in EUR.
-    trade_notional_eur: 30
-
-  momentum:
-    enabled: false          # placeholder — confirm your real logic first
-    instrument: BTC_EUR
-    fast_period: 12
-    slow_period: 26
-    trade_notional_eur: 30
-
-  mean_reversion:
-    enabled: false          # placeholder — confirm your real logic first
-    instrument: ETH_EUR
-    lookback: 50
-    entry_z: 2.0
-    exit_z: 0.5
     trade_notional_eur: 30

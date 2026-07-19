@@ -81,7 +81,7 @@ def test_dry_run_executor_and_risk():
     risk = RiskManager(RiskConfig(max_order_notional_eur=50,
                                   max_total_exposure_eur=200),
                        allowed_instruments=["BTC_EUR", "ETH_BTC", "ETH_EUR"])
-    execu = OrderExecutor(client=None, risk=risk, dry_run=True)
+    execu = OrderExecutor(resolve_exchange=lambda _i: None, risk=risk, dry_run=True)
     market = _market_with_arb()
     strat = TriangularArbitrage({
         "enabled": True, "cycle": ["BTC_EUR", "ETH_BTC", "ETH_EUR"],
