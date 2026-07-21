@@ -1,0 +1,30 @@
+{
+  // Cloudflare Worker deploy config. Used by the GitHub → Cloudflare auto-deploy.
+  "name": "tradingagent",
+  "main": "worker.js",
+  "compatibility_date": "2025-06-01",
+
+  // Non-secret variables. Secrets (ALPACA_API_KEY / ALPACA_API_SECRET) are set
+  // in the Cloudflare dashboard, never in the repo.
+  "vars": {
+    "DRY_RUN": "true"
+  },
+
+  // Persistent state (positions, last run). The id is filled in after you
+  // create the KV namespace in the dashboard — it is NOT secret.
+  "kv_namespaces": [
+    {
+      "binding": "STATE",
+      "id": "REPLACE_WITH_KV_NAMESPACE_ID"
+    }
+  ],
+
+  // Run the bot every 5 minutes.
+  "triggers": {
+    "crons": ["*/5 * * * *"]
+  },
+
+  "observability": {
+    "enabled": true
+  }
+}
