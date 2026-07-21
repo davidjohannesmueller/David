@@ -1,6 +1,6 @@
 {
   // Cloudflare Worker deploy config. Used by the GitHub → Cloudflare auto-deploy.
-  "name": "tradingagent",
+  "name": "trading-agent",
   "main": "worker.js",
   "compatibility_date": "2025-06-01",
 
