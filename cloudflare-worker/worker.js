@@ -18,7 +18,8 @@ const CONFIG = {
   // Stocks to trade (start simple; crypto/forex can be added later).
   instruments: ["AAPL", "MSFT", "SPY"],
   timeframe: "1Hour",          // bar size used for the moving averages
-  bars: 60,                    // how many recent bars to pull
+  bars: 60,                    // how many recent bars to keep
+  lookbackDays: 45,            // how far back to ask Alpaca for bars
   fast: 10,                    // fast moving-average length
   slow: 30,                    // slow moving-average length
   trailingStopPct: 5.0,        // exit if price drops this % below its post-entry high
@@ -48,12 +49,18 @@ function sma(values, n) {
 
 // ── Alpaca calls ───────────────────────────────────────────────────────────
 async function getCloses(env, symbol) {
+  // Without an explicit start, Alpaca only returns today's bars — far too few
+  // for a 30-period average. Look back far enough to cover the slow window.
+  const start = new Date(Date.now() - CONFIG.lookbackDays * 86400_000)
+    .toISOString().slice(0, 10);
   const url = `${CONFIG.dataUrl}/v2/stocks/${encodeURIComponent(symbol)}/bars`
-    + `?timeframe=${CONFIG.timeframe}&limit=${CONFIG.bars}&adjustment=raw&feed=iex`;
+    + `?timeframe=${CONFIG.timeframe}&start=${start}&limit=1000`
+    + `&adjustment=raw&sort=asc&feed=iex`;
   const r = await fetch(url, { headers: authHeaders(env) });
   if (!r.ok) throw new Error(`bars ${symbol}: ${r.status} ${await r.text()}`);
   const j = await r.json();
-  return (j.bars || []).map((b) => b.c);
+  // Oldest → newest; keep only the most recent bars we actually need.
+  return (j.bars || []).map((b) => b.c).slice(-CONFIG.bars);
 }
 
 async function marketOpen(env) {
@@ -113,7 +120,8 @@ async function runTick(env) {
       const fast = sma(closes, CONFIG.fast);
       const slow = sma(closes, CONFIG.slow);
       if (price == null || fast == null || slow == null) {
-        report.push(`${symbol}: not enough data yet`);
+        report.push(`${symbol}: not enough data yet `
+          + `(${closes.length} bars, need ${CONFIG.slow})`);
         continue;
       }
 
