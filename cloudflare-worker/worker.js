@@ -14,15 +14,23 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 const CONFIG = {
-  instruments: ["AAPL", "MSFT", "SPY"],
+  // US stocks and ETFs — only tradable while the US market is open.
+  stocks: ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "AMD",
+           "NFLX", "JPM", "V", "COST", "XOM", "WMT",
+           "SPY", "QQQ", "IWM"],
+  // Crypto trades 24/7, so the bot stays active nights and weekends.
+  crypto: ["BTC/USD", "ETH/USD", "LTC/USD"],
+
   timeframe: "1Hour",          // bar size used for the moving averages
   bars: 60,                    // how many recent bars to keep
-  lookbackDays: 45,            // how far back to ask Alpaca for bars
+  lookbackDays: 20,            // how far back to ask Alpaca for bars
+  maxPages: 8,                 // safety cap when paging through bar history
   fast: 10,                    // fast moving-average length
   slow: 30,                    // slow moving-average length
   trailingStopPct: 5.0,        // exit if price drops this % below its post-entry high
   tradeNotionalUsd: 1000,      // $ per entry
   maxOrderNotionalUsd: 2000,   // hard risk cap per order
+  maxOpenPositions: 10,        // never hold more than this many at once
   historyLimit: 60,            // how many past events the dashboard shows
   timeZone: "Europe/Berlin",   // times are rendered in this zone
   dataUrl: "https://data.alpaca.markets",
@@ -84,19 +92,48 @@ function agoText(iso) {
 }
 
 // ── Alpaca calls ───────────────────────────────────────────────────────────
-async function getCloses(env, symbol) {
+// All instruments the bot watches, each tagged with its asset class.
+function allInstruments() {
+  return [
+    ...CONFIG.stocks.map((symbol) => ({ symbol, cls: "stock" })),
+    ...CONFIG.crypto.map((symbol) => ({ symbol, cls: "crypto" })),
+  ];
+}
+
+// Fetch closing prices for a whole list of symbols in one request (paging as
+// needed). One batched call scales to dozens of instruments; one call per
+// symbol would not. Returns { SYMBOL: [close, …] }, oldest → newest.
+async function fetchCloses(env, symbols, cls) {
+  if (!symbols.length) return {};
   // Without an explicit start, Alpaca only returns today's bars — far too few
-  // for a 30-period average. Look back far enough to cover the slow window.
+  // for a 30-period average.
   const start = new Date(Date.now() - CONFIG.lookbackDays * 86400_000)
     .toISOString().slice(0, 10);
-  const url = `${CONFIG.dataUrl}/v2/stocks/${encodeURIComponent(symbol)}/bars`
-    + `?timeframe=${CONFIG.timeframe}&start=${start}&limit=1000`
-    + `&adjustment=raw&sort=asc&feed=iex`;
-  const r = await fetch(url, { headers: authHeaders(env) });
-  if (!r.ok) throw new Error(`bars ${symbol}: ${r.status} ${await r.text()}`);
-  const j = await r.json();
-  // Oldest → newest; keep only the most recent bars we actually need.
-  return (j.bars || []).map((b) => b.c).slice(-CONFIG.bars);
+  const base = cls === "crypto"
+    ? `${CONFIG.dataUrl}/v1beta3/crypto/us/bars`
+    : `${CONFIG.dataUrl}/v2/stocks/bars`;
+
+  const out = {};
+  let pageToken = null, pages = 0;
+  do {
+    const p = new URLSearchParams({
+      symbols: symbols.join(","), timeframe: CONFIG.timeframe,
+      start, limit: "10000", sort: "asc",
+    });
+    if (cls === "stock") { p.set("adjustment", "raw"); p.set("feed", "iex"); }
+    if (pageToken) p.set("page_token", pageToken);
+
+    const r = await fetch(`${base}?${p}`, { headers: authHeaders(env) });
+    if (!r.ok) throw new Error(`${cls} bars: ${r.status} ${await r.text()}`);
+    const j = await r.json();
+    for (const [sym, arr] of Object.entries(j.bars || {})) {
+      (out[sym] ||= []).push(...(arr || []).map((b) => b.c));
+    }
+    pageToken = j.next_page_token || null;
+  } while (pageToken && ++pages < CONFIG.maxPages);
+
+  for (const sym of Object.keys(out)) out[sym] = out[sym].slice(-CONFIG.bars);
+  return out;
 }
 
 async function marketOpen(env) {
@@ -129,14 +166,15 @@ async function getOrders(env, limit = 15) {
   return r.json();
 }
 
-async function enterLong(env, symbol) {
+async function enterLong(env, symbol, cls) {
   if (CONFIG.tradeNotionalUsd > CONFIG.maxOrderNotionalUsd) {
     throw new Error(`notional ${CONFIG.tradeNotionalUsd} exceeds risk cap`);
   }
   if (isDryRun(env)) return "[DRY-RUN] simuliert";
   const body = {
     symbol, notional: String(CONFIG.tradeNotionalUsd),
-    side: "buy", type: "market", time_in_force: "day",
+    side: "buy", type: "market",
+    time_in_force: cls === "crypto" ? "gtc" : "day",
   };
   const r = await fetch(`${CONFIG.tradingUrl}/v2/orders`, {
     method: "POST",
@@ -149,7 +187,9 @@ async function enterLong(env, symbol) {
 
 async function closePosition(env, symbol) {
   if (isDryRun(env)) return "[DRY-RUN] simuliert";
-  const r = await fetch(`${CONFIG.tradingUrl}/v2/positions/${encodeURIComponent(symbol)}`, {
+  // Positions are keyed without the slash for crypto (BTC/USD → BTCUSD).
+  const posSymbol = symbol.replace("/", "");
+  const r = await fetch(`${CONFIG.tradingUrl}/v2/positions/${encodeURIComponent(posSymbol)}`, {
     method: "DELETE", headers: authHeaders(env),
   });
   if (!r.ok && r.status !== 404) throw new Error(`close ${symbol}: ${r.status} ${await r.text()}`);
@@ -170,17 +210,31 @@ async function loadHistory(env) {
 // ── One evaluation tick ────────────────────────────────────────────────────
 async function runTick(env) {
   const dryRun = isDryRun(env);
-  const open = await marketOpen(env);
   const state = await loadState(env);
   const history = await loadHistory(env);
   const now = new Date().toISOString();
   const rows = [];
 
-  for (const symbol of CONFIG.instruments) {
-    const row = { symbol, price: null, fast: null, slow: null,
+  // Stocks only trade during US market hours; crypto trades around the clock.
+  const stocksOpen = await marketOpen(env);
+  const tradable = { stock: stocksOpen, crypto: true };
+
+  // One batched price request per asset class, not one per symbol.
+  const [stockBars, cryptoBars] = await Promise.all([
+    fetchCloses(env, CONFIG.stocks, "stock").catch((e) => ({ __error: e.message })),
+    fetchCloses(env, CONFIG.crypto, "crypto").catch((e) => ({ __error: e.message })),
+  ]);
+
+  // Respect the cap on how many positions may be open at once.
+  let openCount = Object.values(state).filter((p) => p && p.long).length;
+
+  for (const { symbol, cls } of allInstruments()) {
+    const row = { symbol, cls, price: null, fast: null, slow: null,
                   long: false, high: null, action: "warte", error: null };
+    const source = cls === "crypto" ? cryptoBars : stockBars;
     try {
-      const closes = await getCloses(env, symbol);
+      if (source.__error) throw new Error(source.__error);
+      const closes = source[symbol] || [];
       const price = closes[closes.length - 1];
       const fast = sma(closes, CONFIG.fast);
       const slow = sma(closes, CONFIG.slow);
@@ -196,14 +250,17 @@ async function runTick(env) {
 
       if (!pos.long) {
         if (fast > slow) {
-          if (open) {
-            const res = await enterLong(env, symbol);
+          if (!tradable[cls]) {
+            action = "Kaufsignal — Börse zu, wartet";
+          } else if (openCount >= CONFIG.maxOpenPositions) {
+            action = `Kaufsignal — Limit von ${CONFIG.maxOpenPositions} Positionen erreicht`;
+          } else {
+            const res = await enterLong(env, symbol, cls);
             pos.long = true; pos.high = price;
             pos.entry = price; pos.since = now; pos.simulated = dryRun;
+            openCount++;
             action = `KAUF — ${res}`;
             event = { time: now, symbol, kind: "BUY", price, note: res };
-          } else {
-            action = "Kaufsignal — Börse zu, wartet";
           }
         }
       } else {
@@ -212,10 +269,11 @@ async function runTick(env) {
         const crossDown = fast < slow;
         const stopHit = drawdown >= CONFIG.trailingStopPct / 100;
         if (crossDown || stopHit) {
-          if (open) {
+          if (tradable[cls]) {
             const res = await closePosition(env, symbol);
             const pl = pos.entry ? ((price - pos.entry) / pos.entry) * 100 : null;
             pos.long = false; pos.entry = null; pos.since = null;
+            openCount = Math.max(0, openCount - 1);
             const why = crossDown ? "Trend gedreht" : "Trailing-Stop";
             action = `VERKAUF (${why}) — ${res}`;
             event = { time: now, symbol, kind: "SELL", price, pl,
@@ -237,7 +295,12 @@ async function runTick(env) {
     rows.push(row);
   }
 
-  const summary = { time: now, mode: dryRun ? "DRY-RUN" : "LIVE", marketOpen: open, rows };
+  // Sort so anything the bot is actually holding, and any uptrend, floats up.
+  const rank = (r) => (r.error ? 3 : r.long ? 0 : r.fast > r.slow ? 1 : 2);
+  rows.sort((a, b) => rank(a) - rank(b) || a.symbol.localeCompare(b.symbol));
+
+  const summary = { time: now, mode: dryRun ? "DRY-RUN" : "LIVE",
+                    marketOpen: stocksOpen, openCount, rows };
   await env.STATE.put("positions", JSON.stringify(state));
   await env.STATE.put("history", JSON.stringify(history.slice(0, CONFIG.historyLimit)));
   await env.STATE.put("last_run", JSON.stringify(summary));
@@ -288,9 +351,10 @@ function renderDashboard(d) {
     ? '<span class="badge badge-sim">🛡️ DRY-RUN · simuliert nur</span>'
     : '<span class="badge badge-live">⚡ LIVE · platziert Paper-Orders</span>';
 
-  const marketBadge = d.lastRun?.marketOpen
-    ? '<span class="badge badge-open">● Börse offen</span>'
-    : '<span class="badge badge-closed">● Börse geschlossen</span>';
+  const marketBadge = (d.lastRun?.marketOpen
+    ? '<span class="badge badge-open">● Aktien: Börse offen</span>'
+    : '<span class="badge badge-closed">● Aktien: Börse zu</span>')
+    + ' <span class="badge badge-open">● Krypto: 24/7</span>';
 
   const sign = (v) => (v == null ? "" : v >= 0 ? "pos" : "neg");
   const withSign = (v, fmt) => (v == null ? "—" : (v >= 0 ? "+" : "") + fmt(v));
@@ -366,8 +430,9 @@ function renderDashboard(d) {
         entryCell = '<span class="muted">nicht erfasst</span>';
       }
     }
+    const tag = r.cls === "crypto" ? ' <span class="tag">Krypto</span>' : "";
     return `<tr>
-      <td class="sym">${esc(r.symbol)}</td>
+      <td class="sym">${esc(r.symbol)}${tag}</td>
       <td>${esc(money(r.price))}</td>
       <td>${esc(num(r.fast))}</td>
       <td>${esc(num(r.slow))}</td>
@@ -465,6 +530,8 @@ function renderDashboard(d) {
   .pill-buy{background:#e7f5ec;color:#0f7a43}
   .pill-sell{background:#fdeaea;color:#b3261e}
   .action{font-size:12.5px;color:var(--muted);margin-left:6px}
+  .tag{display:inline-block;padding:1px 7px;border-radius:5px;background:var(--chip);
+       font-size:10.5px;font-weight:600;color:var(--muted);vertical-align:middle;margin-left:5px}
   .warn{background:#fdeaea;color:#b3261e;padding:12px 14px;border-radius:10px;margin-bottom:16px}
   .note{background:var(--chip);color:var(--muted);padding:10px 14px;border-radius:10px;
         font-size:13px;margin-bottom:10px}
@@ -493,7 +560,9 @@ ${kpis}
 </table></div>
 <div class="strategy">Regel: Kauf wenn Schnitt&nbsp;${CONFIG.fast} über Schnitt&nbsp;${CONFIG.slow}
   steigt · Verkauf bei Trendwechsel oder ${num(CONFIG.trailingStopPct, 1)}&nbsp;% Trailing-Stop ·
-  ${money(CONFIG.tradeNotionalUsd)} pro Einstieg</div>
+  ${money(CONFIG.tradeNotionalUsd)} pro Einstieg · höchstens
+  ${CONFIG.maxOpenPositions} Positionen gleichzeitig ·
+  beobachtet ${CONFIG.stocks.length} Aktien/ETFs und ${CONFIG.crypto.length} Kryptowerte</div>
 
 <h2>Offene Positionen beim Broker</h2>
 ${d.dryRun ? `<div class="note">Im DRY-RUN wird <b>nichts wirklich gekauft</b>. Die Tabelle
