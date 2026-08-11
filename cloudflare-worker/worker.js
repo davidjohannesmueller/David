@@ -199,6 +199,7 @@ async function runTick(env) {
           if (open) {
             const res = await enterLong(env, symbol);
             pos.long = true; pos.high = price;
+            pos.entry = price; pos.since = now; pos.simulated = dryRun;
             action = `KAUF — ${res}`;
             event = { time: now, symbol, kind: "BUY", price, note: res };
           } else {
@@ -213,10 +214,12 @@ async function runTick(env) {
         if (crossDown || stopHit) {
           if (open) {
             const res = await closePosition(env, symbol);
-            pos.long = false;
+            const pl = pos.entry ? ((price - pos.entry) / pos.entry) * 100 : null;
+            pos.long = false; pos.entry = null; pos.since = null;
             const why = crossDown ? "Trend gedreht" : "Trailing-Stop";
             action = `VERKAUF (${why}) — ${res}`;
-            event = { time: now, symbol, kind: "SELL", price, note: `${why} · ${res}` };
+            event = { time: now, symbol, kind: "SELL", price, pl,
+                      note: `${why} · ${res}` };
           } else {
             action = "Verkaufssignal — Börse zu, wartet";
           }
@@ -224,7 +227,9 @@ async function runTick(env) {
       }
 
       state[symbol] = pos;
-      Object.assign(row, { price, fast, slow, long: pos.long, high: pos.high, action });
+      Object.assign(row, { price, fast, slow, long: pos.long, high: pos.high,
+                           entry: pos.entry ?? null, since: pos.since ?? null,
+                           simulated: !!pos.simulated, action });
       if (event) history.unshift(event);
     } catch (e) {
       row.error = e.message;
@@ -270,6 +275,15 @@ function renderDashboard(d) {
 
   const openPl = d.positions.reduce((s, p) => s + Number(p.unrealized_pl || 0), 0);
 
+  // In DRY-RUN nothing is really bought — the bot only books entries on paper.
+  // Track those separately so the dashboard never implies positions that
+  // do not exist at the broker.
+  const simLongs = (d.lastRun?.rows || []).filter((r) => r.long && !r.error);
+  const simPl = simLongs.reduce((s, r) => (
+    r.entry ? s + ((r.price - r.entry) / r.entry) * CONFIG.tradeNotionalUsd : s
+  ), 0);
+  const simTracked = simLongs.some((r) => r.entry);
+
   const modeBadge = d.dryRun
     ? '<span class="badge badge-sim">🛡️ DRY-RUN · simuliert nur</span>'
     : '<span class="badge badge-live">⚡ LIVE · platziert Paper-Orders</span>';
@@ -296,10 +310,16 @@ function renderDashboard(d) {
           : esc(withSign(dayPlPct, (v) => num(v) + " %"))}</div>
       </div>
       <div class="card">
-        <div class="k-label">Offene Positionen</div>
-        <div class="k-value">${d.positions.length}</div>
-        <div class="k-sub ${sign(openPl)}">${d.positions.length
-          ? esc(withSign(openPl, money)) + " unrealisiert" : "keine"}</div>
+        <div class="k-label">${d.dryRun ? "Positionen (simuliert)" : "Offene Positionen"}</div>
+        <div class="k-value">${d.dryRun ? simLongs.length : d.positions.length}</div>
+        <div class="k-sub ${d.dryRun ? (simTracked ? sign(simPl) : "") : sign(openPl)}">${
+          d.dryRun
+            ? (simLongs.length
+                ? (simTracked ? esc(withSign(simPl, money)) + " auf dem Papier"
+                              : "kein Einstiegskurs erfasst")
+                : "keine")
+            : (d.positions.length ? esc(withSign(openPl, money)) + " unrealisiert" : "keine")
+        }</div>
       </div>
       <div class="card">
         <div class="k-label">Letzter Check</div>
@@ -327,24 +347,35 @@ function renderDashboard(d) {
   const sigRows = (d.lastRun?.rows || []).map((r) => {
     if (r.error) {
       return `<tr><td class="sym">${esc(r.symbol)}</td>
-        <td colspan="5" class="err">⚠️ ${esc(r.error)}</td></tr>`;
+        <td colspan="6" class="err">⚠️ ${esc(r.error)}</td></tr>`;
     }
     const up = r.fast > r.slow;
     const trend = up
       ? '<span class="trend up">▲ Aufwärts</span>'
       : '<span class="trend down">▼ Abwärts</span>';
     const held = r.long
-      ? '<span class="pill pill-in">im Markt</span>'
+      ? `<span class="pill pill-in">im Markt${d.dryRun ? " (simuliert)" : ""}</span>`
       : '<span class="pill">nicht investiert</span>';
+    let entryCell = "—";
+    if (r.long) {
+      if (r.entry) {
+        const pct = ((r.price - r.entry) / r.entry) * 100;
+        entryCell = `${esc(money(r.entry))}<br>`
+          + `<span class="${sign(pct)}">${esc(withSign(pct, (v) => num(v) + " %"))}</span>`;
+      } else {
+        entryCell = '<span class="muted">nicht erfasst</span>';
+      }
+    }
     return `<tr>
       <td class="sym">${esc(r.symbol)}</td>
       <td>${esc(money(r.price))}</td>
       <td>${esc(num(r.fast))}</td>
       <td>${esc(num(r.slow))}</td>
       <td>${trend}</td>
+      <td>${entryCell}</td>
       <td>${held} <span class="action">${esc(r.action)}</span></td>
     </tr>`;
-  }).join("") || `<tr><td colspan="6" class="empty">Noch kein Durchlauf.</td></tr>`;
+  }).join("") || `<tr><td colspan="7" class="empty">Noch kein Durchlauf.</td></tr>`;
 
   // Activity: bot events + broker orders
   const evRows = d.history.length ? d.history.map((h) => `
@@ -353,7 +384,9 @@ function renderDashboard(d) {
       <td><span class="pill ${h.kind === "BUY" ? "pill-buy" : "pill-sell"}">${esc(h.kind)}</span></td>
       <td class="sym">${esc(h.symbol)}</td>
       <td>${esc(money(h.price))}</td>
-      <td class="muted">${esc(h.note)}</td>
+      <td class="muted">${esc(h.note)}${h.pl != null
+        ? ` · <span class="${sign(h.pl)}">${esc(withSign(h.pl, (v) => num(v) + " %"))}</span>`
+        : ""}</td>
     </tr>`).join("")
     : `<tr><td colspan="5" class="empty">Noch keine Handelsentscheidung getroffen.</td></tr>`;
 
@@ -433,6 +466,8 @@ function renderDashboard(d) {
   .pill-sell{background:#fdeaea;color:#b3261e}
   .action{font-size:12.5px;color:var(--muted);margin-left:6px}
   .warn{background:#fdeaea;color:#b3261e;padding:12px 14px;border-radius:10px;margin-bottom:16px}
+  .note{background:var(--chip);color:var(--muted);padding:10px 14px;border-radius:10px;
+        font-size:13px;margin-bottom:10px}
   .foot{display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin-top:24px;
         font-size:13px;color:var(--muted)}
   .btn{display:inline-block;background:var(--accent);color:#fff;text-decoration:none;
@@ -452,14 +487,18 @@ ${kpis}
 <h2>Aktuelle Signale</h2>
 <div class="panel scroll"><table>
   <thead><tr><th>Wert</th><th>Kurs</th><th>Schnitt ${CONFIG.fast}</th>
-    <th>Schnitt ${CONFIG.slow}</th><th>Trend</th><th>Status des Bots</th></tr></thead>
+    <th>Schnitt ${CONFIG.slow}</th><th>Trend</th><th>Einstieg / G&nbsp;V</th>
+    <th>Status des Bots</th></tr></thead>
   <tbody>${sigRows}</tbody>
 </table></div>
 <div class="strategy">Regel: Kauf wenn Schnitt&nbsp;${CONFIG.fast} über Schnitt&nbsp;${CONFIG.slow}
   steigt · Verkauf bei Trendwechsel oder ${num(CONFIG.trailingStopPct, 1)}&nbsp;% Trailing-Stop ·
   ${money(CONFIG.tradeNotionalUsd)} pro Einstieg</div>
 
-<h2>Offene Positionen</h2>
+<h2>Offene Positionen beim Broker</h2>
+${d.dryRun ? `<div class="note">Im DRY-RUN wird <b>nichts wirklich gekauft</b>. Die Tabelle
+  unten zeigt nur echte Positionen bei Alpaca — im Simulationsmodus bleibt sie leer.
+  Was der Bot <i>täte</i>, steht oben unter „Einstieg / G&nbsp;V".</div>` : ""}
 <div class="panel scroll"><table>
   <thead><tr><th>Wert</th><th>Stück</th><th>Einstieg</th><th>Kurs</th>
     <th>Wert</th><th>G/V</th><th>G/V %</th></tr></thead>
@@ -483,6 +522,9 @@ ${kpis}
   <a class="btn" href="/run">▶ Jetzt einmal prüfen</a>
   <span>Automatisch alle 5 Minuten · Seite aktualisiert sich alle 30 s</span>
   <a href="/api" class="muted">JSON</a>
+  <a href="/reset?confirm=yes" class="muted"
+     onclick="return confirm('Simulierte Positionen und Protokoll zurücksetzen? Echte Broker-Positionen bleiben unberührt.')"
+     >Simulation zurücksetzen</a>
 </div>
 
 </div>
@@ -511,6 +553,16 @@ export default {
 
     if (url.pathname === "/api") {
       return Response.json(await collectDashboardData(env));
+    }
+
+    // Clears the bot's own bookkeeping only — it never touches broker positions.
+    if (url.pathname === "/reset" && url.searchParams.get("confirm") === "yes") {
+      await Promise.all([
+        env.STATE.delete("positions"),
+        env.STATE.delete("history"),
+        env.STATE.delete("last_run"),
+      ]);
+      return Response.redirect(new URL("/", request.url).toString(), 303);
     }
 
     const data = await collectDashboardData(env);
