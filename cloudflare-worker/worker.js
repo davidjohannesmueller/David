@@ -207,6 +207,38 @@ async function loadHistory(env) {
   return raw ? JSON.parse(raw) : [];
 }
 
+// Make the bot's bookkeeping match reality before it decides anything.
+//
+// Live mode: the broker is the single source of truth. Anything the bot thinks
+// it holds but the broker does not have is stale — most importantly the paper
+// entries left over from DRY-RUN, which would otherwise stop the bot from ever
+// buying those symbols for real. Positions opened elsewhere are adopted so the
+// bot manages the stop instead of ignoring them.
+async function reconcileWithBroker(env, state) {
+  const positions = await getPositions(env);
+  const broker = {};
+  for (const p of positions) broker[p.symbol] = p;
+  const notes = [];
+
+  for (const { symbol } of allInstruments()) {
+    const held = broker[symbol.replace("/", "")] || broker[symbol];
+    const pos = state[symbol];
+    if (held && !(pos && pos.long)) {
+      state[symbol] = {
+        long: true, simulated: false,
+        entry: Number(held.avg_entry_price),
+        high: Number(held.current_price || held.avg_entry_price),
+        since: null,
+      };
+      notes.push(`${symbol}: bestehende Position vom Broker übernommen`);
+    } else if (!held && pos && pos.long) {
+      state[symbol] = { long: false, simulated: false, entry: null, high: 0, since: null };
+      notes.push(`${symbol}: vorgemerkte Position verworfen (beim Broker nicht vorhanden)`);
+    }
+  }
+  return notes;
+}
+
 // ── One evaluation tick ────────────────────────────────────────────────────
 async function runTick(env) {
   const dryRun = isDryRun(env);
@@ -218,6 +250,20 @@ async function runTick(env) {
   // Stocks only trade during US market hours; crypto trades around the clock.
   const stocksOpen = await marketOpen(env);
   const tradable = { stock: stocksOpen, crypto: true };
+
+  // Outside DRY-RUN the broker decides what is really held.
+  let reconciled = [];
+  if (!dryRun) {
+    try {
+      reconciled = await reconcileWithBroker(env, state);
+      for (const note of reconciled) {
+        history.unshift({ time: now, symbol: note.split(":")[0], kind: "SYNC",
+                          price: null, note: note.split(": ")[1] });
+      }
+    } catch (e) {
+      reconciled = [`Abgleich mit Broker fehlgeschlagen: ${e.message}`];
+    }
+  }
 
   // One batched price request per asset class, not one per symbol.
   const [stockBars, cryptoBars] = await Promise.all([
@@ -300,7 +346,7 @@ async function runTick(env) {
   rows.sort((a, b) => rank(a) - rank(b) || a.symbol.localeCompare(b.symbol));
 
   const summary = { time: now, mode: dryRun ? "DRY-RUN" : "LIVE",
-                    marketOpen: stocksOpen, openCount, rows };
+                    marketOpen: stocksOpen, openCount, reconciled, rows };
   await env.STATE.put("positions", JSON.stringify(state));
   await env.STATE.put("history", JSON.stringify(history.slice(0, CONFIG.historyLimit)));
   await env.STATE.put("last_run", JSON.stringify(summary));
@@ -446,7 +492,8 @@ function renderDashboard(d) {
   const evRows = d.history.length ? d.history.map((h) => `
     <tr>
       <td class="mono">${esc(localTime(h.time))}</td>
-      <td><span class="pill ${h.kind === "BUY" ? "pill-buy" : "pill-sell"}">${esc(h.kind)}</span></td>
+      <td><span class="pill ${h.kind === "BUY" ? "pill-buy"
+        : h.kind === "SELL" ? "pill-sell" : ""}">${esc(h.kind)}</span></td>
       <td class="sym">${esc(h.symbol)}</td>
       <td>${esc(money(h.price))}</td>
       <td class="muted">${esc(h.note)}${h.pl != null
